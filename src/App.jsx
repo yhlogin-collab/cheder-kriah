@@ -337,7 +337,69 @@ const cleanOldAudio = async (sessions) => {
 const normHeb = s => s.replace(/[\u0591-\u05C7]/g,"").replace(/[.,;:!?״׳"']/g,"").trim().toLowerCase();
 
 /* ══ PASSAGE READER with dual scoring + audio snippet ══ */
-function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapReminder, onSnippet }) {
+/* ─── Shared Mic Hook ─── */
+function useMic(onWord) {
+  const [ready, setReady]   = useState(false);
+  const streamRef           = useRef(null);
+  const recorderRef         = useRef(null);
+  const chunksRef           = useRef([]);
+  const srRef               = useRef(null);
+  const srActiveRef         = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
+      if (cancelled) { stream.getTracks().forEach(t=>t.stop()); return; }
+      streamRef.current = stream;
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SR) {
+        const r = new SR();
+        r.lang = "he-IL"; r.continuous = true; r.interimResults = false; r.maxAlternatives = 1;
+        r.onresult = e => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal)
+              e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean).forEach(w => onWord(w));
+          }
+        };
+        r.onend = () => { if (srActiveRef.current) try { r.start(); } catch {} };
+        srRef.current = r;
+        try { r.start(); srActiveRef.current = true; } catch {}
+      }
+      setReady(true);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      srActiveRef.current = false;
+      try { srRef.current?.abort(); } catch {}
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const startRecording = () => {
+    if (!streamRef.current) return;
+    chunksRef.current = [];
+    try {
+      const mr = new MediaRecorder(streamRef.current, { mimeType:"audio/webm" });
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.start();
+      recorderRef.current = mr;
+    } catch {}
+  };
+
+  const stopRecording = () => new Promise(resolve => {
+    const mr = recorderRef.current;
+    if (!mr || mr.state === "inactive") { resolve(null); return; }
+    mr.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type:"audio/webm" });
+      resolve(blob.size > 1000 ? blob : null);
+    };
+    try { mr.stop(); } catch { resolve(null); }
+  });
+
+  return { ready, startRecording, stopRecording };
+}
+
+/* ══ PASSAGE READER with dual scoring + audio snippet ══ */
   const words = useMemo(()=>passage.text.split(/\s+/).filter(Boolean),[passage.text]);
   const [ws, setWs]   = useState(()=>words.map(w=>({word:w, self:"pending", mic:"pending"})));
   const [idx, setIdx] = useState(0);
