@@ -400,6 +400,7 @@ function useMic(onWord) {
 }
 
 /* ══ PASSAGE READER with dual scoring + audio snippet ══ */
+function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapReminder, onSnippet }) {
   const words = useMemo(()=>passage.text.split(/\s+/).filter(Boolean),[passage.text]);
   const [ws, setWs]   = useState(()=>words.map(w=>({word:w, self:"pending", mic:"pending"})));
   const [idx, setIdx] = useState(0);
