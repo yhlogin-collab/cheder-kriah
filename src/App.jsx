@@ -1,6 +1,7 @@
 import React from "react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { createClient } from "@supabase/supabase-js";
 
 /* ─── Chumash Text ─── */
 const C23 = {
@@ -67,41 +68,38 @@ const SK = {
   teacherPin: "hr:teacher-pin", roster: "hr:roster", custom: "hr:custom",
 };
 /* ─── Supabase Config ─── */
-const SUPABASE_URL = "YOUR_SUPABASE_URL";
-const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
-
-const sbFetch = (path, opts={}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-  ...opts,
-  headers: {
-    "apikey": SUPABASE_KEY,
-    "Authorization": `Bearer ${SUPABASE_KEY}`,
-    "Content-Type": "application/json",
-    ...(opts.headers||{})
-  }
-});
-
+const SUPABASE_URL = "https://qrtaqtgwrqpgbbxtlrrd.supabase.co";
+const SUPABASE_KEY = "sb_publishable_CBniNc1A-K-4ojVV-rM5_g_pLXsiVo5";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const dbGet = async (k, fb) => {
   try {
-    const r = await sbFetch(`kv_store?key=eq.${encodeURIComponent(k)}&select=value`);
-    const d = await r.json();
-    return d.length > 0 ? d[0].value : fb;
-  } catch { return fb; }
+    const { data, error } = await supabase
+      .from("kv_store")
+      .select("value")
+      .eq("key", k)
+      .maybeSingle();
+    if (error) { console.error("dbGet error:", error); return fb; }
+    return data ? data.value : fb;
+  } catch (e) { console.error("dbGet exception:", e); return fb; }
 };
 
 const dbSet = async (k, v) => {
   try {
-    await sbFetch(`kv_store`, {
-      method: "POST",
-      headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ key: k, value: v })
-    });
-  } catch {}
+    const { error } = await supabase
+      .from("kv_store")
+      .upsert({ key: k, value: v }, { onConflict: "key" });
+    if (error) console.error("dbSet error:", error);
+  } catch (e) { console.error("dbSet exception:", e); }
 };
 
 const dbDel = async (k) => {
   try {
-    await sbFetch(`kv_store?key=eq.${encodeURIComponent(k)}`, { method: "DELETE" });
-  } catch {}
+    const { error } = await supabase
+      .from("kv_store")
+      .delete()
+      .eq("key", k);
+    if (error) console.error("dbDel error:", error);
+  } catch (e) { console.error("dbDel exception:", e); }
 };
 const normName = s => s.trim().toLowerCase();
 const DEMO = "demo";
@@ -290,42 +288,27 @@ function DaySelector({ studentName, isDemo, sessions, onSelectDay, onSignOut }) 
 const uploadAudio = async (blob, studentName, day) => {
   try {
     const filename = `${normName(studentName)}_day${day}_${Date.now()}.webm`;
-    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/audio-snippets/${filename}`, {
-      method: "POST",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "audio/webm",
-      },
-      body: blob,
-    });
-    if (res.ok) return filename;
-  } catch {}
-  return null;
+    const { error } = await supabase.storage
+      .from("audio-snippets")
+      .upload(filename, blob, { contentType: "audio/webm" });
+    if (error) { console.error("uploadAudio error:", error); return null; }
+    return filename;
+  } catch (e) { console.error("uploadAudio exception:", e); return null; }
 };
 
 const getAudioUrl = async (filename) => {
   try {
-    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/audio-snippets/${filename}`, {
-      method: "POST",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ expiresIn: 3600 }),
-    });
-    const d = await res.json();
-    return d.signedURL ? `${SUPABASE_URL}/storage/v1${d.signedURL}` : null;
-  } catch { return null; }
+    const { data, error } = await supabase.storage
+      .from("audio-snippets")
+      .createSignedUrl(filename, 3600);
+    if (error) { console.error("getAudioUrl error:", error); return null; }
+    return data.signedUrl;
+  } catch (e) { console.error("getAudioUrl exception:", e); return null; }
 };
 
 const deleteAudio = async (filename) => {
   try {
-    await fetch(`${SUPABASE_URL}/storage/v1/object/audio-snippets/${filename}`, {
-      method: "DELETE",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` },
-    });
+    await supabase.storage.from("audio-snippets").remove([filename]);
   } catch {}
 };
 
@@ -677,7 +660,10 @@ function StudentProgress({ studentName, onBack }) {
     <div className="fade" style={{minHeight:"100vh",padding:"24px 16px",maxWidth:700,margin:"0 auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
         <div><div style={{fontSize:11,letterSpacing:2,color:C.muted}}>STUDENT PROGRESS</div><div style={{fontSize:24,color:C.cream,fontStyle:"italic"}}>{studentName}</div></div>
-        <button style={B("g",{fontSize:12,padding:"7px 14px"})} onClick={onBack}>← Back</button>
+        <div style={{display:"flex",gap:8}}>
+          {validSessions.length>0&&<button style={B("p",{fontSize:12,padding:"7px 14px"})} onClick={()=>generateStudentPDF(studentName,validSessions)}>⬇ Parent Report</button>}
+          <button style={B("g",{fontSize:12,padding:"7px 14px"})} onClick={onBack}>← Back</button>
+        </div>
       </div>
       {loading?<div style={{textAlign:"center",color:C.muted,padding:60}}>Loading…</div>
       :validSessions.length===0?<div style={{textAlign:"center",color:C.muted,padding:60}}><div style={{fontSize:36,marginBottom:12}}>📚</div>No sessions yet for {studentName||"this student"}.</div>
@@ -794,7 +780,247 @@ function StudentProgress({ studentName, onBack }) {
   );
 }
 
-/* ══ TEACHER PANEL ══ */
+/* ══ PDF GENERATION ══ */
+const generateStudentPDF = (studentName, sessions) => {
+  const valid = sessions.filter(s=>s&&typeof s.accuracy==="number");
+  const baseline = valid.find(s=>s.isBaseline);
+  const latest   = valid.length>0 ? valid[valid.length-1] : null;
+  const avg = k => valid.length ? Math.round(valid.reduce((a,s)=>a+(s[k]||0),0)/valid.length) : 0;
+  const best= k => valid.length ? Math.max(...valid.map(s=>s[k]||0)) : 0;
+  const daysCompleted = new Set(valid.map(s=>s.day)).size;
+
+  /* build SVG sparkline for accuracy over time */
+  const pts = valid.map((s,i)=>({x:i,y:s.accuracy||0}));
+  const svgW=400, svgH=80, pad=10;
+  const xS = pts.length>1 ? (svgW-pad*2)/(pts.length-1) : 1;
+  const yS = (svgH-pad*2)/100;
+  const polyAcc = pts.map((p,i)=>`${pad+i*xS},${svgH-pad-p.y*yS}`).join(" ");
+  const polyWpm = pts.map((p,i)=>{
+    const w = valid[i].wpm||0;
+    const maxW = Math.max(...valid.map(s=>s.wpm||1),1);
+    return `${pad+i*xS},${svgH-pad-(w/maxW)*(svgH-pad*2)}`;
+  }).join(" ");
+
+  const impAcc = baseline&&latest ? latest.accuracy-baseline.accuracy : null;
+  const impWpm = baseline&&latest ? latest.wpm-baseline.wpm : null;
+  const deltaStr = (v,unit="") => v===null?"—":v>0?`▲ +${v}${unit}`:`▼ ${v}${unit}`;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Kriah Report — ${studentName}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Georgia',serif;background:#fff;color:#1a1a1a;padding:40px;max-width:720px;margin:0 auto}
+    .header{text-align:center;border-bottom:2px solid #c8943a;padding-bottom:20px;margin-bottom:28px}
+    .school{font-size:11px;letter-spacing:3px;color:#888;margin-bottom:6px}
+    .title{font-size:26px;color:#c8943a;margin-bottom:4px}
+    .subtitle{font-size:13px;color:#555;letter-spacing:1px}
+    .student-name{font-size:32px;color:#1a1a1a;margin:18px 0 4px;font-style:italic}
+    .meta{font-size:12px;color:#888;margin-bottom:24px}
+    .section{margin-bottom:24px}
+    .section-title{font-size:12px;letter-spacing:2px;color:#888;border-bottom:1px solid #eee;padding-bottom:6px;margin-bottom:14px}
+    .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+    .stat-box{border:1px solid #eee;border-radius:8px;padding:14px;text-align:center}
+    .stat-val{font-size:28px;font-weight:700;margin-bottom:4px}
+    .stat-lbl{font-size:10px;letter-spacing:1px;color:#888}
+    .stat-delta{font-size:11px;margin-top:4px}
+    .up{color:#2a7a45}.down{color:#c0392b}.neu{color:#888}
+    .compare{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+    .compare-box{border:1px solid #eee;border-radius:8px;padding:16px}
+    .compare-label{font-size:10px;letter-spacing:2px;color:#888;margin-bottom:8px}
+    .compare-row{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #f5f5f5}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th{background:#f9f4ec;color:#888;letter-spacing:1px;font-size:10px;padding:8px 10px;text-align:left;border-bottom:2px solid #eee}
+    td{padding:7px 10px;border-bottom:1px solid #f5f5f5}
+    tr:last-child td{border-bottom:none}
+    .flag{color:#c0392b;font-size:11px}
+    .footer{margin-top:32px;padding-top:16px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#aaa}
+    svg{display:block;margin:0 auto}
+    @media print{body{padding:20px}button{display:none}}
+  </style></head><body>
+  <div class="header">
+    <div class="school">חֶדֶר לוּבַּאוִויטש — דַּאַלַאס</div>
+    <div class="title">Summer Kriah Program</div>
+    <div class="subtitle">Cheder Lubavitch of Dallas · Student Progress Report</div>
+  </div>
+
+  <div class="student-name">${studentName}</div>
+  <div class="meta">
+    ${daysCompleted} day${daysCompleted!==1?"s":""} completed &nbsp;·&nbsp;
+    ${valid.length} session${valid.length!==1?"s":""} recorded &nbsp;·&nbsp;
+    Report generated ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}
+  </div>
+
+  <div class="section">
+    <div class="section-title">CURRENT PERFORMANCE</div>
+    <div class="stats-grid">
+      ${[
+        [latest?`${latest.accuracy}%`:"—","#2a7a45","Accuracy",impAcc!==null?`${deltaStr(impAcc,"%")}`:""],
+        [latest?latest.wpm:"—","#2255aa","Words / Min",impWpm!==null?`${deltaStr(impWpm)}`:""],
+        [best("accuracy")+"%","#555","Best Accuracy","all time"],
+        [daysCompleted,"#c8943a","Days Completed","of 50"],
+      ].map(([v,cl,lb,sub])=>`
+        <div class="stat-box">
+          <div class="stat-val" style="color:${cl}">${v}</div>
+          <div class="stat-lbl">${lb}</div>
+          ${sub?`<div class="stat-delta ${sub.includes("▲")?"up":sub.includes("▼")?"down":"neu"}">${sub}</div>`:""}
+        </div>`).join("")}
+    </div>
+  </div>
+
+  ${baseline&&latest&&valid.length>1?`
+  <div class="section">
+    <div class="section-title">BASELINE vs. LATEST</div>
+    <div class="compare">
+      <div class="compare-box">
+        <div class="compare-label">FIRST SESSION (BASELINE)</div>
+        <div class="compare-row"><span>Accuracy</span><span>${baseline.accuracy}%</span></div>
+        <div class="compare-row"><span>Words / Min</span><span>${baseline.wpm}</span></div>
+        <div class="compare-row"><span>Date</span><span>${new Date(baseline.date).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span></div>
+      </div>
+      <div class="compare-box">
+        <div class="compare-label">MOST RECENT SESSION</div>
+        <div class="compare-row"><span>Accuracy</span><span style="color:${impAcc>=0?"#2a7a45":"#c0392b"}">${latest.accuracy}% ${deltaStr(impAcc,"%")}</span></div>
+        <div class="compare-row"><span>Words / Min</span><span style="color:${impWpm>=0?"#2255aa":"#c0392b"}">${latest.wpm} ${deltaStr(impWpm)}</span></div>
+        <div class="compare-row"><span>Date</span><span>${new Date(latest.date).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span></div>
+      </div>
+    </div>
+  </div>`:""}
+
+  ${pts.length>1?`
+  <div class="section">
+    <div class="section-title">IMPROVEMENT OVER TIME</div>
+    <svg width="${svgW}" height="${svgH}" style="width:100%;max-width:${svgW}px">
+      <defs>
+        <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#2a7a45" stop-opacity="0.15"/>
+          <stop offset="100%" stop-color="#2a7a45" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <polygon points="${polyAcc} ${pad+(pts.length-1)*xS},${svgH-pad} ${pad},${svgH-pad}" fill="url(#ga)"/>
+      <polyline points="${polyAcc}" fill="none" stroke="#2a7a45" stroke-width="2"/>
+      <polyline points="${polyWpm}" fill="none" stroke="#2255aa" stroke-width="2" stroke-dasharray="4,3"/>
+      ${pts.map((p,i)=>`<circle cx="${pad+i*xS}" cy="${svgH-pad-p.y*yS}" r="3" fill="#2a7a45"/>`).join("")}
+    </svg>
+    <div style="text-align:center;font-size:10px;color:#888;margin-top:6px">
+      <span style="color:#2a7a45">— Accuracy %</span> &nbsp;&nbsp;
+      <span style="color:#2255aa">- - WPM (scaled)</span>
+    </div>
+  </div>`:""}
+
+  <div class="section">
+    <div class="section-title">SESSION HISTORY</div>
+    <table>
+      <tr><th>Date</th><th>Day</th><th>Accuracy</th><th>WPM</th><th>Errors</th><th>Notes</th></tr>
+      ${[...valid].reverse().map(s=>`
+        <tr>
+          <td>${new Date(s.date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</td>
+          <td>${s.day}${s.isBaseline?" ★":""}</td>
+          <td>${s.accuracy}%</td>
+          <td>${s.wpm}</td>
+          <td>${s.incorrect||0}</td>
+          <td class="flag">${[
+            s.isBaseline?"Baseline session":"",
+            s.isReview?"Review day":"",
+            s.speedFlag?"Fast tapping flagged":"",
+          ].filter(Boolean).join(", ")||"—"}</td>
+        </tr>`).join("")}
+    </table>
+  </div>
+
+  <div class="footer">
+    Cheder Lubavitch of Dallas — Summer Kriah Program &nbsp;·&nbsp;
+    This report was generated automatically from reading session data.
+  </div>
+
+  <script>window.onload=()=>window.print();</script>
+  </body></html>`;
+
+  const w = window.open("","_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+};
+
+const generateClassPDF = async (roster) => {
+  const rows = await Promise.all(roster.map(async s => {
+    const sessions = await dbGet(SK.sessions(s.name), []);
+    const valid = sessions.filter(x=>x&&typeof x.accuracy==="number");
+    const baseline = valid.find(x=>x.isBaseline);
+    const latest   = valid.length>0 ? valid[valid.length-1] : null;
+    const days     = new Set(valid.map(x=>x.day)).size;
+    const lastDate = valid.length>0 ? new Date(valid[valid.length-1].date).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
+    const impAcc   = baseline&&latest ? latest.accuracy-baseline.accuracy : null;
+    return { name:s.name, days, baseline, latest, impAcc, lastDate, sessions:valid.length };
+  }));
+  rows.sort((a,b)=>(b.latest?.accuracy||0)-(a.latest?.accuracy||0));
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Class Overview — Summer Kriah</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Georgia',serif;background:#fff;color:#1a1a1a;padding:40px;max-width:900px;margin:0 auto}
+    .header{text-align:center;border-bottom:2px solid #c8943a;padding-bottom:20px;margin-bottom:28px}
+    .school{font-size:11px;letter-spacing:3px;color:#888;margin-bottom:6px}
+    .title{font-size:26px;color:#c8943a;margin-bottom:4px}
+    .subtitle{font-size:13px;color:#555}
+    .meta{font-size:12px;color:#888;margin:16px 0 24px;text-align:center}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th{background:#f9f4ec;color:#888;letter-spacing:1px;font-size:10px;padding:10px 12px;text-align:left;border-bottom:2px solid #e8e0d0}
+    td{padding:10px 12px;border-bottom:1px solid #f0ece4;vertical-align:middle}
+    tr:nth-child(even) td{background:#fdfaf5}
+    .rank{color:#c8943a;font-weight:700;font-size:15px}
+    .name{font-size:15px;font-style:italic}
+    .up{color:#2a7a45;font-weight:600}.down{color:#c0392b}.neu{color:#aaa}
+    .bar-bg{background:#f0ece4;border-radius:4px;height:8px;width:100px;display:inline-block;vertical-align:middle;margin-left:6px}
+    .bar-fg{background:#2a7a45;border-radius:4px;height:8px;display:block}
+    .footer{margin-top:32px;padding-top:16px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#aaa}
+    @media print{body{padding:20px}button{display:none}}
+  </style></head><body>
+  <div class="header">
+    <div class="school">חֶדֶר לוּבַּאוִויטש — דַּאַלַאס</div>
+    <div class="title">Summer Kriah Program — Class Overview</div>
+    <div class="subtitle">Cheder Lubavitch of Dallas</div>
+  </div>
+  <div class="meta">
+    ${roster.length} students &nbsp;·&nbsp;
+    Report generated ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}
+  </div>
+
+  <table>
+    <tr>
+      <th>#</th><th>Student</th><th>Days</th><th>Sessions</th>
+      <th>Baseline Acc.</th><th>Current Acc.</th><th>Improvement</th>
+      <th>Current WPM</th><th>Last Session</th>
+    </tr>
+    ${rows.map((r,i)=>{
+      const deltaStr = r.impAcc===null?"—":r.impAcc>0?`▲ +${r.impAcc}%`:r.impAcc<0?`▼ ${r.impAcc}%`:"—";
+      const deltaClass = r.impAcc===null?"neu":r.impAcc>0?"up":r.impAcc<0?"down":"neu";
+      const accPct = r.latest?.accuracy||0;
+      return `<tr>
+        <td class="rank">${i+1}</td>
+        <td class="name">${r.name}</td>
+        <td>${r.days}</td>
+        <td>${r.sessions}</td>
+        <td>${r.baseline?r.baseline.accuracy+"%":"—"}</td>
+        <td>
+          ${r.latest?r.latest.accuracy+"%":"—"}
+          ${r.latest?`<span class="bar-bg"><span class="bar-fg" style="width:${accPct}%"></span></span>`:""}
+        </td>
+        <td class="${deltaClass}">${deltaStr}</td>
+        <td>${r.latest?r.latest.wpm:"—"}</td>
+        <td>${r.lastDate}</td>
+      </tr>`;
+    }).join("")}
+  </table>
+
+  <div class="footer">
+    Cheder Lubavitch of Dallas — Summer Kriah Program &nbsp;·&nbsp;
+    Students ranked by current accuracy. ★ = baseline session.
+  </div>
+  <script>window.onload=()=>window.print();</script>
+  </body></html>`;
+
+  const w = window.open("","_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+};
 function Teacher({ customPassages, onAdd, onDelete, onBack, onViewStudent, onChangePIN }) {
   const [f,setF]=useState({titleEn:"",title:"",text:"",level:"Intermediate"});
   const [open,setOpen]=useState(false);
@@ -822,6 +1048,7 @@ function Teacher({ customPassages, onAdd, onDelete, onBack, onViewStudent, onCha
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
         <div style={{fontSize:22,color:C.cream,fontStyle:"italic"}}>🎓 Teacher Panel</div>
         <div style={{display:"flex",gap:8}}>
+          {roster.length>0&&<button style={B("p",{fontSize:12,padding:"7px 12px"})} onClick={()=>generateClassPDF(roster)}>⬇ Class Overview</button>}
           <button style={B("g",{fontSize:12,padding:"7px 12px"})} onClick={onChangePIN}>Change PIN</button>
           <button style={B("g",{fontSize:12,padding:"7px 12px"})} onClick={onBack}>← Back</button>
         </div>
