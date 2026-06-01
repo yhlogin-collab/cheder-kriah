@@ -71,6 +71,7 @@ const SK = {
 const SUPABASE_URL = "https://qrtaqtgwrqpgbbxtlrrd.supabase.co";
 const SUPABASE_KEY = "sb_publishable_CBniNc1A-K-4ojVV-rM5_g_pLXsiVo5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const dbGet = async (k, fb) => {
   try {
     const { data, error } = await supabase
@@ -732,47 +733,48 @@ function StudentProgress({ studentName, onBack }) {
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18}}>
           <div style={{fontSize:14,color:C.gold,fontStyle:"italic",marginBottom:12}}>Session history</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:400,overflowY:"auto"}}>
-            {[...sessions].reverse().map((s,i)=>{
+            {[...validSessions].reverse().map((s,i)=>{
               const hasFlag=s.speedFlag||s.tapReminderFired||(s.micSelfGap!=null&&s.micSelfGap>30);
               return (
-              <div key={i} style={{background:C.surface,borderRadius:10,padding:"10px 14px",border:`1px solid ${hasFlag?C.red+"55":C.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:hasFlag?8:0}}>
-                  <div>
-                    <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:3}}>
-                      <span style={{fontSize:11,background:`${C.gold}18`,color:C.goldL,padding:"2px 8px",borderRadius:10,border:`1px solid ${C.gold}33`}}>Day {s.day}</span>
-                      {s.isBaseline&&<span style={{fontSize:10,color:C.blue,background:`${C.blue}15`,padding:"2px 7px",borderRadius:10}}>baseline</span>}
-                      {s.isReview&&<span style={{fontSize:10,color:C.gold,background:`${C.gold}15`,padding:"2px 7px",borderRadius:10}}>✡ review</span>}
-                    </div>
-                    <div style={{fontSize:10,color:C.muted}}>{new Date(s.date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</div>
-                  </div>
-                  <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                <div key={i} style={{background:C.surface,borderRadius:10,padding:"10px 14px",border:"1px solid "+(hasFlag?C.red+"55":C.border)}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div>
-                      <div style={{fontSize:9,color:C.muted,textAlign:"center",marginBottom:3,letterSpacing:1}}>SELF</div>
-                      <div style={{display:"flex",gap:8}}>
-                        {[[s.fluency,C.gold,"FLU"],[`${s.accuracy}%`,C.green,"ACC"],[s.wpm,C.blue,"WPM"]].map(([v,cl,lb])=>(
-                          <div key={lb} style={{textAlign:"center"}}><div style={{fontSize:13,color:cl,fontWeight:700}}>{v}</div><div style={{fontSize:9,color:C.muted}}>{lb}</div></div>
-                        ))}
+                      <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:3}}>
+                        <span style={{fontSize:11,background:C.gold+"18",color:C.goldL,padding:"2px 8px",borderRadius:10,border:"1px solid "+C.gold+"33"}}>Day {s.day}</span>
+                        {s.isBaseline&&<span style={{fontSize:10,color:C.blue,background:C.blue+"15",padding:"2px 7px",borderRadius:10}}>baseline</span>}
+                        {s.isReview&&<span style={{fontSize:10,color:C.gold,background:C.gold+"15",padding:"2px 7px",borderRadius:10}}>review</span>}
                       </div>
+                      <div style={{fontSize:10,color:C.muted}}>{new Date(s.date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</div>
                     </div>
-                    {s.micAcc!=null&&(
-                      <div style={{borderLeft:`1px solid ${C.border}`,paddingLeft:8}}>
-                        <div style={{fontSize:9,color:C.muted,textAlign:"center",marginBottom:3,letterSpacing:1}}>MIC</div>
-                        <div style={{textAlign:"center"}}><div style={{fontSize:13,color:C.blue,fontWeight:700}}>{s.micAcc}%</div><div style={{fontSize:9,color:C.muted}}>ACC</div></div>
+                    <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                      <div>
+                        <div style={{fontSize:9,color:C.muted,textAlign:"center",marginBottom:3,letterSpacing:1}}>SELF</div>
+                        <div style={{display:"flex",gap:8}}>
+                          {[[s.fluency,C.gold,"FLU"],[s.accuracy+"%",C.green,"ACC"],[s.wpm,C.blue,"WPM"]].map(([v,cl,lb])=>(
+                            <div key={lb} style={{textAlign:"center"}}><div style={{fontSize:13,color:cl,fontWeight:700}}>{v}</div><div style={{fontSize:9,color:C.muted}}>{lb}</div></div>
+                          ))}
+                        </div>
                       </div>
-                    )}
+                      {s.micAcc!=null&&(
+                        <div style={{borderLeft:"1px solid "+C.border,paddingLeft:8}}>
+                          <div style={{fontSize:9,color:C.muted,textAlign:"center",marginBottom:3,letterSpacing:1}}>MIC</div>
+                          <div style={{textAlign:"center"}}><div style={{fontSize:13,color:C.blue,fontWeight:700}}>{s.micAcc}%</div><div style={{fontSize:9,color:C.muted}}>ACC</div></div>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  {s.audioFile&&<AudioPlayer filename={s.audioFile}/>}
+                  {hasFlag&&(
+                    <div style={{background:C.red+"0e",border:"1px solid "+C.red+"33",borderRadius:6,padding:"7px 10px",marginTop:6,fontSize:11,color:C.red,lineHeight:1.5}}>
+                      {[s.speedFlag?"Tapped 2x faster than baseline":null,
+                        s.tapReminderFired?"Reading reminder shown mid-session":null,
+                        (s.micSelfGap!=null&&s.micSelfGap>30)?("Self "+s.accuracy+"% vs mic "+s.micAcc+"% — worth a conversation"):null
+                      ].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
                 </div>
-                  {s.audioFile && <AudioPlayer filename={s.audioFile}/>}
-                  <div style={{background:`${C.red}0e`,border:`1px solid ${C.red}33`,borderRadius:6,padding:"7px 10px",fontSize:11,color:C.red,lineHeight:1.5}}>
-                    ⚑ {[
-                      s.speedFlag?`Tapped 2× faster than their baseline pace`:null,
-                      s.tapReminderFired?`App showed a reading reminder mid-session`:null,
-                      s.micSelfGap!=null&&s.micSelfGap>30?`${s.micSelfGap}pt gap between self-score (${s.accuracy}%) and mic-score (${s.micAcc}%) — worth a conversation`:null,
-                    ].filter(Boolean).join(" · ")}
-                  </div>
-                )}
-              </div>
-            );})}
+              );
+            })}
           </div>
         </div>
       </>)}
@@ -1220,3 +1222,5 @@ export default function App() {
     </div>
   );
 }
+                  {hasFlag && (
+                  )}
