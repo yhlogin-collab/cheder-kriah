@@ -334,69 +334,6 @@ const cleanOldAudio = async (sessions) => {
   sessions.filter(s => s.audioFile && s.date < cutoff).forEach(s => deleteAudio(s.audioFile));
 };
 
-/* ─── Audio Recording Hook ─── */
-function useAudioRecorder() {
-  const recorderRef  = useRef(null);
-  const chunksRef    = useRef([]);
-  const streamRef    = useRef(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
-      streamRef.current = stream;
-      setReady(true);
-    }).catch(() => {});
-    return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
-  }, []);
-
-  const startRecording = () => {
-    if (!streamRef.current) return;
-    chunksRef.current = [];
-    const mr = new MediaRecorder(streamRef.current, { mimeType: "audio/webm" });
-    mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    mr.start();
-    recorderRef.current = mr;
-  };
-
-  const stopRecording = () => new Promise(resolve => {
-    const mr = recorderRef.current;
-    if (!mr || mr.state === "inactive") { resolve(null); return; }
-    mr.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-      resolve(blob.size > 1000 ? blob : null);
-    };
-    mr.stop();
-  });
-
-  return { ready, startRecording, stopRecording };
-}
-function useSpeechRec(onWord) {
-  const recRef = useRef(null);
-  const activeRef = useRef(false);
-  const [micOk, setMicOk] = useState(false);
-
-  useEffect(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    const r = new SR();
-    r.lang = "he-IL"; r.continuous = true; r.interimResults = false; r.maxAlternatives = 1;
-    r.onresult = e => {
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
-          words.forEach(w => onWord(w));
-        }
-      }
-    };
-    r.onend = () => { if (activeRef.current) try { r.start(); } catch {} };
-    r.onerror = e => { if (e.error === "not-allowed" || e.error === "service-not-allowed") setMicOk(false); };
-    recRef.current = r;
-    try { r.start(); setMicOk(true); activeRef.current = true; } catch { setMicOk(false); }
-    return () => { activeRef.current = false; try { r.abort(); } catch {} };
-  }, []);
-
-  return micOk;
-}
 
 /* ── normalize Hebrew for comparison ── */
 const normHeb = s => s.replace(/[\u0591-\u05C7]/g,"").replace(/[.,;:!?״׳"']/g,"").trim().toLowerCase();
@@ -411,16 +348,10 @@ function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapRe
   const passageStartRef = useRef(Date.now());
   const snippetFiredRef = useRef(false);
   const halfwayIdx      = Math.floor(words.length / 2);
+  const micWordQueue    = useRef([]);
+  const micIdxRef       = useRef(0);
 
-  const { ready: recReady, startRecording, stopRecording } = useAudioRecorder();
-
-  /* start recording immediately */
-  useEffect(() => { if (recReady) startRecording(); }, [recReady]);
-
-  /* mic background scoring */
-  const micWordQueue = useRef([]);
-  const micIdxRef    = useRef(0);
-  useSpeechRec(heardWord => {
+  const { ready: micReady, startRecording, stopRecording } = useMic(heardWord => {
     const norm = normHeb(heardWord);
     micWordQueue.current.push(norm);
     setWs(prev => {
@@ -437,6 +368,9 @@ function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapRe
       return next;
     });
   });
+
+  /* start recording as soon as mic is ready */
+  useEffect(() => { if (micReady) startRecording(); }, [micReady]);
 
   /* self-tap */
   const mark = (status) => {
