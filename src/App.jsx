@@ -544,6 +544,8 @@ function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassag
     const filename = await uploadAudio(blob, studentName, dayNum);
     if (filename) setAudioFile(filename);
   };
+
+  const handleTapReminder = () => {
     if (tapReminderFired) return;
     setTapReminderFired(true); setTapReminder(true);
     setTimeout(()=>setTapReminder(false), 5000);
