@@ -3,7 +3,21 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { createClient } from "@supabase/supabase-js";
 
-/* ─── Chumash Text ─── */
+/* ─── Error Boundary ─── */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) return (
+      <div style={{padding:40,color:"#e85a5a",fontFamily:"monospace",background:"#07111d",minHeight:"100vh"}}>
+        <div style={{fontSize:18,marginBottom:12}}>Something went wrong:</div>
+        <pre style={{fontSize:12,whiteSpace:"pre-wrap"}}>{this.state.error?.message}</pre>
+        <button onClick={()=>this.setState({error:null})} style={{marginTop:20,padding:"10px 20px",background:"#c8943a",border:"none",borderRadius:6,cursor:"pointer",color:"#000"}}>Try Again</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 const C23 = {
   v1_4:   "וַיִּהְיוּ חַיֵּי שָׂרָה מֵאָה שָׁנָה וְעֶשְׂרִים שָׁנָה וְשֶׁבַע שָׁנִים שְׁנֵי חַיֵּי שָׂרָה וַתָּמָת שָׂרָה בְּקִרְיַת אַרְבַּע הִוא חֶבְרוֹן בְּאֶרֶץ כְּנָעַן וַיָּבֹא אַבְרָהָם לִסְפֹּד לְשָׂרָה וְלִבְכֹּתָהּ וַיָּקָם אַבְרָהָם מֵעַל פְּנֵי מֵתוֹ וַיְדַבֵּר אֶל בְּנֵי חֵת לֵאמֹר גֵּר וְתוֹשָׁב אָנֹכִי עִמָּכֶם תְּנוּ לִי אֲחֻזַּת קֶבֶר עִמָּכֶם וְאֶקְבְּרָה מֵתִי מִלְּפָנָי",
   v5_8:   "וַיַּעֲנוּ בְנֵי חֵת אֶת אַבְרָהָם לֵאמֹר לוֹ שְׁמָעֵנוּ אֲדֹנִי נְשִׂיא אֱלֹהִים אַתָּה בְּתוֹכֵנוּ בְּמִבְחַר קְבָרֵינוּ קְבֹר אֶת מֵתֶךָ אִישׁ מִמֶּנּוּ אֶת קִבְרוֹ לֹא יִכְלֶה מִמְּךָ מִקְּבֹר מֵתֶךָ וַיָּקָם אַבְרָהָם וַיִּשְׁתַּחוּ לְעַם הָאָרֶץ לִבְנֵי חֵת וַיְדַבֵּר אִתָּם לֵאמֹר אִם יֵשׁ אֶת נַפְשְׁכֶם לִקְבֹּר אֶת מֵתִי מִלְּפָנַי שְׁמָעוּנִי וּפִגְעוּ לִי בְּעֶפְרוֹן בֶּן צֹחַר",
@@ -435,7 +449,14 @@ function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapRe
 
 /* ══ FULL SESSION ══ */
 function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassages, baselineWpm, studentName, dayNum }) {
-  const passages = isReview ? reviewPassages : [dayEntry.ch, dayEntry.sid];
+  const passages = isReview ? reviewPassages : (dayEntry ? [dayEntry.ch, dayEntry.sid] : []);
+  if (!passages || passages.length === 0) return (
+    <div style={{padding:40,textAlign:"center",color:C.muted}}>
+      <div style={{fontSize:32,marginBottom:12}}>📚</div>
+      <div>No passages found for this day.</div>
+      <button style={{...B("g",{fontSize:14,padding:"10px 24px",marginTop:20})}} onClick={onCancel}>← Back</button>
+    </div>
+  );
   const [pIdx,setPIdx]     = useState(0);
   const [allResults,setAllResults] = useState([]);
   const [elapsed,setElapsed]   = useState(0);
@@ -1192,6 +1213,7 @@ export default function App() {
   return (
     <div style={{background:C.bg,minHeight:"100vh",color:C.text}}>
       <style>{CSS}</style>
+      <ErrorBoundary>
 
       {screen==="welcome" && <Welcome onEnter={handleEnter} onTeacherClick={handleTeacherClick}/>}
 
@@ -1219,6 +1241,7 @@ export default function App() {
       {screen==="teacher" && <Teacher customPassages={custom} onAdd={addCustom} onDelete={delCustom} onBack={()=>setScreen("welcome")} onViewStudent={viewStudent} onChangePIN={()=>setScreen("teacherSetup")}/>}
 
       {screen==="studentProgress" && <StudentProgress studentName={viewingStudent} onBack={()=>setScreen("teacher")}/>}
+      </ErrorBoundary>
     </div>
   );
 }
