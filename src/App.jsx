@@ -67,8 +67,8 @@ const SK = {
   teacherPin: "hr:teacher-pin", roster: "hr:roster", custom: "hr:custom",
 };
 /* ─── Supabase Config ─── */
-const SUPABASE_URL = "https://qrtaqtgwrqpgbbxtlrrd.supabase.co";
-const SUPABASE_KEY = "sb_publishable_CBniNc1A-K-4ojVV-rM5_g_pLXsiVo5";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 
 const sbFetch = (path, opts={}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
   ...opts,
@@ -286,7 +286,90 @@ function DaySelector({ studentName, isDemo, sessions, onSelectDay, onSignOut }) 
   );
 }
 
-/* ══ SPEECH RECOGNITION HOOK ══ */
+/* ─── Audio Storage ─── */
+const uploadAudio = async (blob, studentName, day) => {
+  try {
+    const filename = `${normName(studentName)}_day${day}_${Date.now()}.webm`;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/audio-snippets/${filename}`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "audio/webm",
+      },
+      body: blob,
+    });
+    if (res.ok) return filename;
+  } catch {}
+  return null;
+};
+
+const getAudioUrl = async (filename) => {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/audio-snippets/${filename}`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expiresIn: 3600 }),
+    });
+    const d = await res.json();
+    return d.signedURL ? `${SUPABASE_URL}/storage/v1${d.signedURL}` : null;
+  } catch { return null; }
+};
+
+const deleteAudio = async (filename) => {
+  try {
+    await fetch(`${SUPABASE_URL}/storage/v1/object/audio-snippets/${filename}`, {
+      method: "DELETE",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` },
+    });
+  } catch {}
+};
+
+const cleanOldAudio = async (sessions) => {
+  const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  sessions.filter(s => s.audioFile && s.date < cutoff).forEach(s => deleteAudio(s.audioFile));
+};
+
+/* ─── Audio Recording Hook ─── */
+function useAudioRecorder() {
+  const recorderRef  = useRef(null);
+  const chunksRef    = useRef([]);
+  const streamRef    = useRef(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
+      streamRef.current = stream;
+      setReady(true);
+    }).catch(() => {});
+    return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
+  }, []);
+
+  const startRecording = () => {
+    if (!streamRef.current) return;
+    chunksRef.current = [];
+    const mr = new MediaRecorder(streamRef.current, { mimeType: "audio/webm" });
+    mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    mr.start();
+    recorderRef.current = mr;
+  };
+
+  const stopRecording = () => new Promise(resolve => {
+    const mr = recorderRef.current;
+    if (!mr || mr.state === "inactive") { resolve(null); return; }
+    mr.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      resolve(blob.size > 1000 ? blob : null);
+    };
+    mr.stop();
+  });
+
+  return { ready, startRecording, stopRecording };
+}
 function useSpeechRec(onWord) {
   const recRef = useRef(null);
   const activeRef = useRef(false);
@@ -318,16 +401,23 @@ function useSpeechRec(onWord) {
 /* ── normalize Hebrew for comparison ── */
 const normHeb = s => s.replace(/[\u0591-\u05C7]/g,"").replace(/[.,;:!?״׳"']/g,"").trim().toLowerCase();
 
-/* ══ PASSAGE READER with dual scoring ══ */
-function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapReminder }) {
+/* ══ PASSAGE READER with dual scoring + audio snippet ══ */
+function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapReminder, onSnippet }) {
   const words = useMemo(()=>passage.text.split(/\s+/).filter(Boolean),[passage.text]);
   const [ws, setWs]   = useState(()=>words.map(w=>({word:w, self:"pending", mic:"pending"})));
   const [idx, setIdx] = useState(0);
   const [done, setDone] = useState(false);
-  const tapTimesRef   = useRef([]);    // ms timestamps of each tap
+  const tapTimesRef     = useRef([]);
   const passageStartRef = useRef(Date.now());
+  const snippetFiredRef = useRef(false);
+  const halfwayIdx      = Math.floor(words.length / 2);
 
-  /* mic — runs in background, marks mic score independently */
+  const { ready: recReady, startRecording, stopRecording } = useAudioRecorder();
+
+  /* start recording immediately */
+  useEffect(() => { if (recReady) startRecording(); }, [recReady]);
+
+  /* mic background scoring */
   const micWordQueue = useRef([]);
   const micIdxRef    = useRef(0);
   useSpeechRec(heardWord => {
@@ -353,7 +443,16 @@ function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapRe
     const now = Date.now();
     tapTimesRef.current.push(now);
 
-    /* speed check — if we have at least 5 taps, check avg gap vs baseline */
+    /* capture 20-second snippet at halfway point */
+    if (!snippetFiredRef.current && idx >= halfwayIdx) {
+      snippetFiredRef.current = true;
+      setTimeout(async () => {
+        const blob = await stopRecording();
+        if (blob) onSnippet(blob);
+      }, 20000);
+    }
+
+    /* speed check */
     if (!tapReminderFired && baselineWpm > 0 && tapTimesRef.current.length >= 5) {
       const gaps = tapTimesRef.current.slice(-5).reduce((acc, t, i, arr) => {
         if (i === 0) return acc;
@@ -417,7 +516,7 @@ function PassageReader({ passage, onDone, baselineWpm, tapReminderFired, onTapRe
 }
 
 /* ══ FULL SESSION ══ */
-function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassages, baselineWpm }) {
+function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassages, baselineWpm, studentName, dayNum }) {
   const passages = isReview ? reviewPassages : [dayEntry.ch, dayEntry.sid];
   const [pIdx,setPIdx]     = useState(0);
   const [allResults,setAllResults] = useState([]);
@@ -439,7 +538,12 @@ function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassag
     if(!tenFiredRef.current && elapsed>=600){ tenFiredRef.current=true; setTenMinBanner(true); }
   },[elapsed]);
 
-  const handleTapReminder = () => {
+  const [audioFile, setAudioFile] = useState(null);
+
+  const handleSnippet = async (blob) => {
+    const filename = await uploadAudio(blob, studentName, dayNum);
+    if (filename) setAudioFile(filename);
+  };
     if (tapReminderFired) return;
     setTapReminderFired(true); setTapReminder(true);
     setTimeout(()=>setTapReminder(false), 5000);
@@ -485,7 +589,7 @@ function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassag
         wpm:avgSelfWpm, accuracy:avgSelfAcc, fluency:flu, totalTime:totalSec,
         isReview, passageDetails:newResults,
         micAcc:avgMicAcc, micSelfGap, speedFlag,
-        tapReminderFired,
+        tapReminderFired, audioFile,
       }),400);
     }
   };
@@ -520,7 +624,8 @@ function ReadingSession({ dayEntry, onComplete, onCancel, isReview, reviewPassag
 
       {phase==="reading" && (
         <PassageReader key={pIdx} passage={passages[pIdx]} onDone={handlePassageDone}
-          baselineWpm={baselineWpm} tapReminderFired={tapReminderFired} onTapReminder={handleTapReminder}/>
+          baselineWpm={baselineWpm} tapReminderFired={tapReminderFired} onTapReminder={handleTapReminder}
+          onSnippet={pIdx===0 ? handleSnippet : ()=>{}}/>
       )}
 
       {phase==="transition" && (
@@ -578,12 +683,51 @@ function ProgramComplete({ studentName, onRestart }) {
   );
 }
 
+/* ══ AUDIO PLAYER ══ */
+function AudioPlayer({ filename }) {
+  const [url, setUrl]       = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef(null);
+
+  const load = async () => {
+    if (url) { toggle(); return; }
+    setLoading(true);
+    const signed = await getAudioUrl(filename);
+    setLoading(false);
+    if (!signed) return;
+    setUrl(signed);
+    setTimeout(() => { audioRef.current?.play(); setPlaying(true); }, 100);
+  };
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) { a.pause(); setPlaying(false); }
+    else { a.play(); setPlaying(true); }
+  };
+
+  return (
+    <div style={{display:"inline-flex",alignItems:"center",gap:6}}>
+      <button onClick={load} style={{background:`${C.blue}18`,border:`1px solid ${C.blue}44`,borderRadius:20,padding:"3px 10px",fontSize:12,color:C.blue,cursor:"pointer"}}>
+        {loading ? "…" : playing ? "⏸ pause" : "🎙 play snippet"}
+      </button>
+      {url && <audio ref={audioRef} src={url} onEnded={()=>setPlaying(false)} style={{display:"none"}}/>}
+    </div>
+  );
+}
+
 /* ══ STUDENT PROGRESS ══ */
 function StudentProgress({ studentName, onBack }) {
   const [sessions,setSessions]=useState([]); const [loading,setLoading]=useState(true);
   useEffect(()=>{
     if(!studentName){ setLoading(false); return; }
-    dbGet(SK.sessions(studentName),[]).then(s=>{ setSessions(Array.isArray(s)?s:[]); setLoading(false); });
+    dbGet(SK.sessions(studentName),[]).then(s=>{
+      const arr = Array.isArray(s)?s:[];
+      setSessions(arr);
+      setLoading(false);
+      cleanOldAudio(arr);
+    });
   },[studentName]);
 
   const validSessions = sessions.filter(s=>s && typeof s.fluency==="number" && typeof s.accuracy==="number" && typeof s.wpm==="number");
@@ -696,7 +840,7 @@ function StudentProgress({ studentName, onBack }) {
                     )}
                   </div>
                 </div>
-                {hasFlag&&(
+                  {s.audioFile && <AudioPlayer filename={s.audioFile}/>}
                   <div style={{background:`${C.red}0e`,border:`1px solid ${C.red}33`,borderRadius:6,padding:"7px 10px",fontSize:11,color:C.red,lineHeight:1.5}}>
                     ⚑ {[
                       s.speedFlag?`Tapped 2× faster than their baseline pace`:null,
@@ -891,7 +1035,8 @@ export default function App() {
       {screen==="reading" && dayEntry && (
         <ReadingSession dayEntry={dayEntry} isReview={isReview} reviewPassages={reviewPassages}
           onComplete={handleComplete} onCancel={()=>setScreen("daySelect")}
-          baselineWpm={sessions.find(s=>s.isBaseline)?.wpm || 0}/>
+          baselineWpm={sessions.find(s=>s.isBaseline)?.wpm || 0}
+          studentName={name} dayNum={selectedDay}/>
       )}
 
       {screen==="results" && result && (
